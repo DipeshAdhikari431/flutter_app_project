@@ -38,7 +38,7 @@ class TodoHomePage extends StatefulWidget {
 class _TodoHomePageState extends State<TodoHomePage> {
   final List<Todo> _todos = [
     Todo(title: 'Open the todolist app', note: 'In the morning'),
-    Todo(title: 'Toggle a task', note: 'Go to bathroom'),
+    Todo(title: 'Break time', note: 'Collect your mainbox'),
     Todo(title: 'Project Alex', note: 'see the JIRA task'),
   ];
 
@@ -128,7 +128,7 @@ class _TodoHomePageState extends State<TodoHomePage> {
     final noteCtrl = TextEditingController(
       text: isEdit ? (_todos[existingIndex].note ?? '') : '',
     );
-
+//dialogue box
     await showDialog(
       context: context,
       builder: (_) => AlertDialog(
@@ -170,6 +170,7 @@ class _TodoHomePageState extends State<TodoHomePage> {
             onPressed: () => Navigator.pop(context),
             child: const Text('Cancel'),
           ),
+          //text button
           FilledButton(
             onPressed: () {
               final title = titleCtrl.text.trim();
