@@ -1,14 +1,11 @@
 import 'package:flutter/material.dart';
+import 'package:provider/provider.dart';
+
+import 'models/todo.dart';
+import 'providers/todo_provider.dart';
 
 void main() {
   runApp(const TodoApp());
-}
-
-class Todo {
-  String title;
-  String? note;
-  bool done;
-  Todo({required this.title, this.note, this.done = false});
 }
 
 class TodoApp extends StatelessWidget {
@@ -16,14 +13,17 @@ class TodoApp extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return MaterialApp(
-      title: 'Simple ToDo',
-      debugShowCheckedModeBanner: false,
-      theme: ThemeData(
-        useMaterial3: true,
-        colorSchemeSeed: Colors.indigo,
+    return ChangeNotifierProvider(
+      create: (_) => TodoProvider()..init(),
+      child: MaterialApp(
+        title: 'Simple ToDo (SQLite + JSON)',
+        debugShowCheckedModeBanner: false,
+        theme: ThemeData(
+          useMaterial3: true,
+          colorSchemeSeed: Colors.indigo,
+        ),
+        home: const TodoHomePage(),
       ),
-      home: const TodoHomePage(),
     );
   }
 }
@@ -36,15 +36,11 @@ class TodoHomePage extends StatefulWidget {
 }
 
 class _TodoHomePageState extends State<TodoHomePage> {
-  final List<Todo> _todos = [
-    Todo(title: 'Open the todolist app', note: 'In the morning'),
-    Todo(title: 'Break time', note: 'Collect your mainbox'),
-    Todo(title: 'Project Alex', note: 'see the JIRA task'),
-  ];
-
   @override
   Widget build(BuildContext context) {
-    final completed = _todos.where((t) => t.done).length;
+    final provider = context.watch<TodoProvider>();
+    final completed = provider.todos.where((t) => t.done).length;
+
     return Scaffold(
       appBar: AppBar(
         title: const Text('Simple ToDo'),
@@ -53,36 +49,54 @@ class _TodoHomePageState extends State<TodoHomePage> {
             child: Padding(
               padding: const EdgeInsets.symmetric(horizontal: 12),
               child: Text(
-                '$completed / ${_todos.length}',
+                '$completed / ${provider.todos.length}',
                 style: Theme.of(context).textTheme.titleMedium,
               ),
             ),
           ),
           IconButton(
-            tooltip: 'Clear completed',
-            onPressed: () {
-              setState(() => _todos.removeWhere((t) => t.done));
+            tooltip: 'Export JSON',
+            onPressed: () async {
+              final path = await context.read<TodoProvider>().exportToDocuments();
+              if (!mounted) return;
               ScaffoldMessenger.of(context).showSnackBar(
-                const SnackBar(content: Text('Cleared completed tasks')),
+                SnackBar(content: Text('Exported to: $path')),
               );
             },
-            icon: const Icon(Icons.cleaning_services),
+            icon: const Icon(Icons.download),
+          ),
+          PopupMenuButton<String>(
+            onSelected: (v) async {
+              if (v == 'import_asset') {
+                await context.read<TodoProvider>().importFromAsset('assets/todos_seed.json');
+                if (!mounted) return;
+                ScaffoldMessenger.of(context).showSnackBar(
+                  const SnackBar(content: Text('Imported seed from assets')),
+                );
+              } else if (v == 'import_docs') {
+                await _promptImportFromDocs(context);
+              }
+            },
+            itemBuilder: (context) => const [
+              PopupMenuItem(value: 'import_asset', child: Text('Import seed (assets)')),
+              PopupMenuItem(value: 'import_docs', child: Text('Import from documents...')),
+            ],
           ),
         ],
       ),
-      body: _todos.isEmpty
+      body: provider.todos.isEmpty
           ? const _EmptyState()
           : ListView.separated(
-        itemCount: _todos.length,
+        itemCount: provider.todos.length,
         separatorBuilder: (_, __) => const Divider(height: 0),
         itemBuilder: (context, i) {
-          final t = _todos[i];
+          final t = provider.todos[i];
           return Dismissible(
-            key: ValueKey('${t.title}-$i'),
-            background: _swipeBg(alignment: Alignment.centerLeft),
-            secondaryBackground: _swipeBg(alignment: Alignment.centerRight),
+            key: ValueKey(t.id),
+            background: _swipeBg(Alignment.centerLeft),
+            secondaryBackground: _swipeBg(Alignment.centerRight),
             onDismissed: (_) {
-              setState(() => _todos.removeAt(i));
+              context.read<TodoProvider>().remove(t);
               ScaffoldMessenger.of(context).showSnackBar(
                 SnackBar(content: Text('Deleted "${t.title}"')),
               );
@@ -90,7 +104,7 @@ class _TodoHomePageState extends State<TodoHomePage> {
             child: ListTile(
               leading: Checkbox(
                 value: t.done,
-                onChanged: (_) => setState(() => t.done = !t.done),
+                onChanged: (_) => context.read<TodoProvider>().toggle(t),
               ),
               title: Text(
                 t.title,
@@ -99,7 +113,7 @@ class _TodoHomePageState extends State<TodoHomePage> {
                 ),
               ),
               subtitle: (t.note?.isNotEmpty ?? false) ? Text(t.note!) : null,
-              onTap: () => _showAddEditDialog(existingIndex: i),
+              onTap: () => _showAddEditDialog(existing: t),
             ),
           );
         },
@@ -111,24 +125,18 @@ class _TodoHomePageState extends State<TodoHomePage> {
     );
   }
 
-  Widget _swipeBg({required Alignment alignment}) {
-    return Container(
-      color: Colors.red,
-      alignment: alignment,
-      padding: const EdgeInsets.symmetric(horizontal: 16),
-      child: const Icon(Icons.delete, color: Colors.white),
-    );
-  }
+  Widget _swipeBg(Alignment a) => Container(
+    color: Colors.red,
+    alignment: a,
+    padding: const EdgeInsets.symmetric(horizontal: 16),
+    child: const Icon(Icons.delete, color: Colors.white),
+  );
 
-  Future<void> _showAddEditDialog({int? existingIndex}) async {
-    final isEdit = existingIndex != null;
-    final titleCtrl = TextEditingController(
-      text: isEdit ? _todos[existingIndex].title : '',
-    );
-    final noteCtrl = TextEditingController(
-      text: isEdit ? (_todos[existingIndex].note ?? '') : '',
-    );
-//dialogue box
+  Future<void> _showAddEditDialog({Todo? existing}) async {
+    final isEdit = existing != null;
+    final titleCtrl = TextEditingController(text: existing?.title ?? '');
+    final noteCtrl = TextEditingController(text: existing?.note ?? '');
+
     await showDialog(
       context: context,
       builder: (_) => AlertDialog(
@@ -138,18 +146,12 @@ class _TodoHomePageState extends State<TodoHomePage> {
           children: [
             TextField(
               controller: titleCtrl,
-              decoration: const InputDecoration(
-                labelText: 'Title',
-                hintText: 'e.g., Buy milk',
-              ),
+              decoration: const InputDecoration(labelText: 'Title', hintText: 'e.g., Buy milk'),
             ),
             const SizedBox(height: 8),
             TextField(
               controller: noteCtrl,
-              decoration: const InputDecoration(
-                labelText: 'Note (optional)',
-                hintText: 'Details, due date, etc.',
-              ),
+              decoration: const InputDecoration(labelText: 'Note (optional)'),
               maxLines: 3,
             ),
           ],
@@ -158,7 +160,7 @@ class _TodoHomePageState extends State<TodoHomePage> {
           if (isEdit)
             TextButton(
               onPressed: () {
-                setState(() => _todos.removeAt(existingIndex));
+                context.read<TodoProvider>().remove(existing!);
                 Navigator.pop(context);
                 ScaffoldMessenger.of(context).showSnackBar(
                   const SnackBar(content: Text('Task deleted')),
@@ -166,28 +168,49 @@ class _TodoHomePageState extends State<TodoHomePage> {
               },
               child: const Text('Delete'),
             ),
-          TextButton(
-            onPressed: () => Navigator.pop(context),
-            child: const Text('Cancel'),
-          ),
-          //text button
+          TextButton(onPressed: () => Navigator.pop(context), child: const Text('Cancel')),
           FilledButton(
-            onPressed: () {
+            onPressed: () async {
               final title = titleCtrl.text.trim();
               final note = noteCtrl.text.trim();
               if (title.isEmpty) return;
-              setState(() {
-                if (isEdit) {
-                  final t = _todos[existingIndex!];
-                  t.title = title;
-                  t.note = note.isEmpty ? null : note;
-                } else {
-                  _todos.insert(0, Todo(title: title, note: note.isEmpty ? null : note));
-                }
-              });
-              Navigator.pop(context);
+
+              final prov = context.read<TodoProvider>();
+              if (isEdit) {
+                await prov.update(existing!, title: title, note: note);
+              } else {
+                await prov.add(Todo(title: title, note: note.isEmpty ? null : note));
+              }
+              if (context.mounted) Navigator.pop(context);
             },
             child: Text(isEdit ? 'Save' : 'Add'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Future<void> _promptImportFromDocs(BuildContext context) async {
+    final ctrl = TextEditingController(text: 'todos_export.json');
+    await showDialog(
+      context: context,
+      builder: (_) => AlertDialog(
+        title: const Text('Import from documents'),
+        content: TextField(
+          controller: ctrl,
+          decoration: const InputDecoration(
+            labelText: 'File name in app documents',
+            helperText: 'Default: todos_export.json',
+          ),
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(context), child: const Text('Cancel')),
+          FilledButton(
+            onPressed: () async {
+              await context.read<TodoProvider>().importFromDocuments(ctrl.text.trim(), merge: true);
+              if (context.mounted) Navigator.pop(context);
+            },
+            child: const Text('Import'),
           ),
         ],
       ),
@@ -199,13 +222,11 @@ class _EmptyState extends StatelessWidget {
   const _EmptyState();
 
   @override
-  Widget build(BuildContext context) {
-    return Center(
-      child: Text(
-        'No tasks yet.\nTap + to add your first one!',
-        textAlign: TextAlign.center,
-        style: Theme.of(context).textTheme.titleMedium,
-      ),
-    );
-  }
+  Widget build(BuildContext context) => Center(
+    child: Text(
+      'No tasks yet.\nTap + to add your first one!',
+      textAlign: TextAlign.center,
+      style: Theme.of(context).textTheme.titleMedium,
+    ),
+  );
 }
